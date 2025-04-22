@@ -1,4 +1,6 @@
 // server/index.js
+const http = require("http");
+const initializeSocket = require("./socket");
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -8,12 +10,16 @@ require("dotenv").config();
 
 // Initialize app
 const app = express();
+const server = http.createServer(app);
+const { io, emitNewEntry } = initializeSocket(server);
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret";
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.set("emitNewEntry", emitNewEntry);
+
 
 // MongoDB connection
 mongoose
@@ -310,6 +316,11 @@ app.post("/api/entries/non-registered", async (req, res) => {
     });
 
     const entry = await newEntry.save();
+
+    // Emit the new entry event
+    const emitNewEntry = req.app.get("emitNewEntry");
+    emitNewEntry(entry, entry.baseId);
+
     res.json(entry);
   } catch (err) {
     console.error(err);
@@ -545,6 +556,7 @@ app.put(
 app.get("/api/entries", async (req, res) => {
   try {
     const entries = await Entry.find().sort({ createdAt: -1 });
+    
     res.json(entries);
   } catch (err) {
     console.error(err);
@@ -591,6 +603,11 @@ app.post("/api/entries", async (req, res) => {
     });
 
     const entry = await newEntry.save();
+
+        // Emit the new entry event
+    const emitNewEntry = req.app.get("emitNewEntry");
+    emitNewEntry(entry, entry.baseId);
+
     res.json(entry);
   } catch (err) {
     console.error(err);
@@ -706,7 +723,10 @@ app.get("/api/entries/paginated", async (req, res) => {
   }
 });
 
+
+
+
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
