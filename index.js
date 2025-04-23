@@ -20,7 +20,6 @@ app.use(cors());
 app.use(express.json());
 app.set("emitNewEntry", emitNewEntry);
 
-
 // MongoDB connection
 mongoose
   .connect(
@@ -556,7 +555,7 @@ app.put(
 app.get("/api/entries", async (req, res) => {
   try {
     const entries = await Entry.find().sort({ createdAt: -1 });
-    
+
     res.json(entries);
   } catch (err) {
     console.error(err);
@@ -604,7 +603,7 @@ app.post("/api/entries", async (req, res) => {
 
     const entry = await newEntry.save();
 
-        // Emit the new entry event
+    // Emit the new entry event
     const emitNewEntry = req.app.get("emitNewEntry");
     emitNewEntry(entry, entry.baseId);
 
@@ -667,10 +666,6 @@ app.get("/api/entries/paginated", async (req, res) => {
     const query = {};
 
     // Apply filters if provided
-    if (req.query.traineeId) {
-      query.traineeId = req.query.traineeId;
-    }
-
     if (req.query.departmentId) {
       query.departmentId = req.query.departmentId;
     }
@@ -722,9 +717,6 @@ app.get("/api/entries/paginated", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
-
 
 // Start server
 server.listen(PORT, () => {
