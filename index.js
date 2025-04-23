@@ -718,6 +718,74 @@ app.get("/api/entries/paginated", async (req, res) => {
   }
 });
 
+// Paginated trainees route with filtering
+app.get("/api/trainees/paginated", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 30; // Default limit per page
+    const skip = (page - 1) * limit;
+
+    // Build filter query
+    const query = {};
+
+    // Apply base filter if gymAdmin
+    if (req.query.baseId) {
+      query.baseId = req.query.baseId;
+    }
+
+    // Apply search filter if provided
+    if (req.query.search) {
+      // Search by trainee name or ID
+      query.$or = [
+        { fullName: { $regex: req.query.search, $options: "i" } },
+        { personalId: { $regex: req.query.search, $options: "i" } },
+      ];
+    }
+
+    // Medical approval filter
+    if (req.query.showOnlyExpired === "true") {
+      query.$or = [
+        { "medicalApproval.approved": false },
+        {
+          $and: [
+            { "medicalApproval.approved": true },
+            { "medicalApproval.expirationDate": { $lt: new Date() } },
+          ],
+        },
+      ];
+    }
+
+    // Expiration date filter
+    if (req.query.expirationDate) {
+      const expirationDate = new Date(req.query.expirationDate);
+      query["medicalApproval.approved"] = true;
+      query["medicalApproval.expirationDate"] = { $lt: expirationDate };
+    }
+
+    // Get total count
+    const total = await Trainee.countDocuments(query);
+
+    // Get paginated trainees
+    const trainees = await Trainee.find(query)
+      .sort({ fullName: 1 }) // Sort by name
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      trainees,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
