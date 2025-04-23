@@ -786,6 +786,39 @@ app.get("/api/trainees/paginated", async (req, res) => {
   }
 });
 
+// trainees that trained in the last week
+app.get("/api/trainees/last-week", authMiddleware, async (req, res) => {
+  try {
+    // Get the date from 7 days ago
+    const today = new Date();
+    const lastWeek = new Date();
+    lastWeek.setDate(today.getDate() - 7);
+
+    // Format dates to match the string format used in EntrySchema
+    const todayStr = today.toISOString().split("T")[0];
+    const lastWeekStr = lastWeek.toISOString().split("T")[0];
+
+    // Query to find entries from the last week with successful status
+    const recentEntries = await Entry.find({
+      entryDate: {
+        $gte: lastWeekStr,
+        $lte: todayStr,
+      },
+      status: "success",
+    }).distinct("traineeId");
+
+    // Query to find the trainees who have these entries
+    const activeTrainees = await Trainee.find({
+      _id: { $in: recentEntries },
+      ...(req.admin.role === "gymAdmin" ? { baseId: req.admin.baseId } : {}),
+    });
+    res.json(activeTrainees);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
