@@ -719,7 +719,7 @@ app.get("/api/entries/paginated", async (req, res) => {
 });
 
 // Paginated trainees route with filtering
-app.get("/api/trainees/paginated", async (req, res) => {
+app.get("/api/trainees/paginated", authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 30; // Default limit per page
@@ -729,7 +729,7 @@ app.get("/api/trainees/paginated", async (req, res) => {
     const query = {};
 
     // Apply base filter if gymAdmin
-    if (req.query.baseId) {
+    if (req.query.baseId && req.admin.role === "gymAdmin") {
       query.baseId = req.query.baseId;
     }
 
