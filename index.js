@@ -48,6 +48,7 @@ const EntryStatus = {
   SUCCESS: "success",
   NO_MEDICAL_APPROVAL: "noMedicalApproval",
   NOT_REGISTERED: "notRegistered",
+  NOT_ASSOCIATED: "notAssociated",
 };
 
 const AdminSchema = new mongoose.Schema({
@@ -656,7 +657,7 @@ app.post("/api/admins", authMiddleware, async (req, res) => {
   }
 });
 // Paginated entries route
-app.get("/api/entries/paginated", async (req, res) => {
+app.get("/api/entries/paginated", authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20; // Fixed limit
@@ -674,7 +675,7 @@ app.get("/api/entries/paginated", async (req, res) => {
       query.subDepartmentId = req.query.subDepartmentId;
     }
 
-    if (req.query.baseId) {
+    if (req.query.baseId && req.admin.role === "gymAdmin") {
       query.baseId = req.query.baseId;
     }
 
