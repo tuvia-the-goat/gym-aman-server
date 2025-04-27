@@ -552,6 +552,36 @@ app.put(
   }
 );
 
+// Transfer trainees between subdepartments
+app.put("/api/trainees/transfer-subdepartment", authMiddleware, async (req, res) => {
+  const { oldSubDepartmentId, newSubDepartmentId } = req.body;
+
+  try {
+    // Get the new subdepartment to verify it exists and get its departmentId
+    const newSubDepartment = await SubDepartment.findById(newSubDepartmentId);
+    if (!newSubDepartment) {
+      return res.status(404).json({ message: "תת-המסגרת החדשה לא נמצאה" });
+    }
+
+    // Update all trainees in the old subdepartment with both new subdepartment and department
+    const result = await Trainee.updateMany(
+      { subDepartmentId: oldSubDepartmentId },
+      { 
+        subDepartmentId: newSubDepartmentId,
+        departmentId: newSubDepartment.departmentId // Update the departmentId to match the new subdepartment's department
+      }
+    );
+
+    res.json({
+      message: `הועברו ${result.modifiedCount} חניכים לתת-המסגרת החדשה`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "שגיאת שרת" });
+  }
+});
+
 // Entry routes
 app.get("/api/entries", async (req, res) => {
   try {
@@ -723,7 +753,225 @@ app.get("/api/entries/paginated", async (req, res) => {
   }
 });
 
+// Base update routes
+app.put("/api/bases/:id", authMiddleware, async (req, res) => {
+  const { name, location } = req.body;
+  const baseId = req.params.id;
 
+  // Only allBasesAdmin can update bases
+  if (req.admin.role !== "generalAdmin") {
+    return res.status(403).json({ message: "Not authorized" });
+  }
+
+  try {
+    const base = await Base.findById(baseId);
+    
+    if (!base) {
+      return res.status(404).json({ message: "Base not found" });
+    }
+    
+    base.name = name;
+    base.location = location;
+    
+    const updatedBase = await base.save();
+    res.json(updatedBase);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.delete("/api/bases/:id", authMiddleware, async (req, res) => {
+  const baseId = req.params.id;
+
+  // Only allBasesAdmin can delete bases
+  if (req.admin.role !== "generalAdmin") {
+    return res.status(403).json({ message: "Not authorized" });
+  }
+
+  try {
+    // Check if base exists
+    const base = await Base.findById(baseId);
+    if (!base) {
+      return res.status(404).json({ message: "Base not found" });
+    }
+    
+    // Check if base is being used by departments
+    const departmentsCount = await Department.countDocuments({ baseId });
+    if (departmentsCount > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete base with associated departments. Delete the departments first." 
+      });
+    }
+    
+    // Check if base is being used by admins
+    const adminsCount = await Admin.countDocuments({ baseId });
+    if (adminsCount > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete base with associated administrators. Change admin associations first." 
+      });
+    }
+    
+    // Delete the base
+    await Base.findByIdAndDelete(baseId);
+    res.json({ message: "Base deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Department update routes
+app.put("/api/departments/:id", authMiddleware, async (req, res) => {
+  const { name, baseId } = req.body;
+  const departmentId = req.params.id;
+
+  try {
+    const department = await Department.findById(departmentId);
+    
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    
+    // Check if the admin is authorized for this base
+    if (
+      req.admin.role === "gymAdmin" &&
+      req.admin.baseId.toString() !== baseId
+    ) {
+      return res.status(403).json({ message: "Not authorized for this base" });
+    }
+    
+    department.name = name;
+    department.baseId = baseId;
+    
+    const updatedDepartment = await department.save();
+    res.json(updatedDepartment);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.delete("/api/departments/:id", authMiddleware, async (req, res) => {
+  const departmentId = req.params.id;
+
+  try {
+    // Check if department exists
+    const department = await Department.findById(departmentId);
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    
+    // Check if admin is authorized for this department's base
+    if (
+      req.admin.role === "gymAdmin" &&
+      req.admin.baseId.toString() !== department.baseId.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized for this department" });
+    }
+    
+    // Check if department is being used by subdepartments
+    const subDepartmentsCount = await SubDepartment.countDocuments({ departmentId });
+    if (subDepartmentsCount > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete department with associated sub-departments. Delete the sub-departments first." 
+      });
+    }
+    
+    // Check if department is being used by trainees
+    const traineesCount = await Trainee.countDocuments({ departmentId });
+    if (traineesCount > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete department with associated trainees. Change trainee associations first." 
+      });
+    }
+    
+    // Delete the department
+    await Department.findByIdAndDelete(departmentId);
+    res.json({ message: "Department deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// SubDepartment update routes
+app.put("/api/subDepartments/:id", authMiddleware, async (req, res) => {
+  const { name, departmentId } = req.body;
+  const subDepartmentId = req.params.id;
+  
+  try {
+    // Check if the subDepartment exists
+    const subDepartment = await SubDepartment.findById(subDepartmentId);
+    if (!subDepartment) {
+      return res.status(404).json({ message: "SubDepartment not found" });
+    }
+    
+    // Check if the department exists
+    const department = await Department.findById(departmentId);
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    
+    // Check if the admin is authorized for this department's base
+    if (
+      req.admin.role === "gymAdmin" &&
+      req.admin.baseId.toString() !== department.baseId.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized for this department" });
+    }
+    
+    subDepartment.name = name;
+    subDepartment.departmentId = departmentId;
+    
+    const updatedSubDepartment = await subDepartment.save();
+    res.json(updatedSubDepartment);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.delete("/api/subDepartments/:id", authMiddleware, async (req, res) => {
+  const subDepartmentId = req.params.id;
+
+  try {
+    // Check if subDepartment exists
+    const subDepartment = await SubDepartment.findById(subDepartmentId);
+    if (!subDepartment) {
+      return res.status(404).json({ message: "SubDepartment not found" });
+    }
+    
+    // Get the department to check base permission
+    const department = await Department.findById(subDepartment.departmentId);
+    if (!department) {
+      return res.status(404).json({ message: "Associated department not found" });
+    }
+    
+    // Check if admin is authorized for this department's base
+    if (
+      req.admin.role === "gymAdmin" &&
+      req.admin.baseId.toString() !== department.baseId.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized for this sub-department" });
+    }
+    
+    // Check if subDepartment is being used by trainees
+    const traineesCount = await Trainee.countDocuments({ subDepartmentId });
+    if (traineesCount > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete sub-department with associated trainees. Change trainee associations first." 
+      });
+    }
+    
+    // Delete the subDepartment
+    await SubDepartment.findByIdAndDelete(subDepartmentId);
+    res.json({ message: "SubDepartment deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 // Start server
