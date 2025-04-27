@@ -20,7 +20,6 @@ app.use(cors());
 app.use(express.json());
 app.set("emitNewEntry", emitNewEntry);
 
-
 // MongoDB connection
 mongoose
   .connect(
@@ -586,7 +585,7 @@ app.put("/api/trainees/transfer-subdepartment", authMiddleware, async (req, res)
 app.get("/api/entries", async (req, res) => {
   try {
     const entries = await Entry.find().sort({ createdAt: -1 });
-    
+
     res.json(entries);
   } catch (err) {
     console.error(err);
@@ -697,10 +696,6 @@ app.get("/api/entries/paginated", async (req, res) => {
     const query = {};
 
     // Apply filters if provided
-    if (req.query.traineeId) {
-      query.traineeId = req.query.traineeId;
-    }
-
     if (req.query.departmentId) {
       query.departmentId = req.query.departmentId;
     }
@@ -971,8 +966,106 @@ app.delete("/api/subDepartments/:id", authMiddleware, async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   }
+});// Paginated trainees route with filtering
+app.get("/api/trainees/paginated", authMiddleware, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 30; // Default limit per page
+    const skip = (page - 1) * limit;
+
+    // Build filter query
+    const query = {};
+
+    // Apply base filter if gymAdmin
+    if (req.query.baseId && req.admin.role === "gymAdmin") {
+      query.baseId = req.query.baseId;
+    }
+
+    // Apply search filter if provided
+    if (req.query.search) {
+      // Search by trainee name or ID
+      query.$or = [
+        { fullName: { $regex: req.query.search, $options: "i" } },
+        { personalId: { $regex: req.query.search, $options: "i" } },
+      ];
+    }
+
+    // Medical approval filter
+    if (req.query.showOnlyExpired === "true") {
+      query.$or = [
+        { "medicalApproval.approved": false },
+        {
+          $and: [
+            { "medicalApproval.approved": true },
+            { "medicalApproval.expirationDate": { $lt: new Date() } },
+          ],
+        },
+      ];
+    }
+
+    // Expiration date filter
+    if (req.query.expirationDate) {
+      const expirationDate = new Date(req.query.expirationDate);
+      query["medicalApproval.approved"] = true;
+      query["medicalApproval.expirationDate"] = { $lt: expirationDate };
+    }
+
+    // Get total count
+    const total = await Trainee.countDocuments(query);
+
+    // Get paginated trainees
+    const trainees = await Trainee.find(query)
+      .sort({ fullName: 1 }) // Sort by name
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      trainees,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
+// trainees that trained in the last week
+app.get("/api/trainees/last-week", authMiddleware, async (req, res) => {
+  try {
+    // Get the date from 7 days ago
+    const today = new Date();
+    const lastWeek = new Date();
+    lastWeek.setDate(today.getDate() - 7);
+
+    // Format dates to match the string format used in EntrySchema
+    const todayStr = today.toISOString().split("T")[0];
+    const lastWeekStr = lastWeek.toISOString().split("T")[0];
+
+    // Query to find entries from the last week with successful status
+    const recentEntries = await Entry.find({
+      entryDate: {
+        $gte: lastWeekStr,
+        $lte: todayStr,
+      },
+      status: "success",
+    }).distinct("traineeId");
+
+    // Query to find the trainees who have these entries
+    const activeTrainees = await Trainee.find({
+      _id: { $in: recentEntries },
+      ...(req.admin.role === "gymAdmin" ? { baseId: req.admin.baseId } : {}),
+    });
+    res.json(activeTrainees);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 // Start server
 server.listen(PORT, () => {
