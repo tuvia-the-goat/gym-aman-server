@@ -48,6 +48,7 @@ const EntryStatus = {
   SUCCESS: "success",
   NO_MEDICAL_APPROVAL: "noMedicalApproval",
   NOT_REGISTERED: "notRegistered",
+  NOT_ASSOCIATED: "notAssociated",
 };
 
 const AdminSchema = new mongoose.Schema({
@@ -363,6 +364,54 @@ app.post("/api/departments", authMiddleware, async (req, res) => {
   }
 });
 
+// Create department with multiple subdepartments
+app.post(
+  "/api/departments/with-subdepartments",
+  authMiddleware,
+  async (req, res) => {
+    const { name, baseId, subDepartments } = req.body;
+
+    try {
+      // Check if the admin is authorized for this base
+      if (
+        req.admin.role === "gymAdmin" &&
+        req.admin.baseId.toString() !== baseId
+      ) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized for this base" });
+      }
+
+      // Create the department
+      const newDepartment = new Department({
+        name,
+        baseId,
+      });
+
+      const department = await newDepartment.save();
+
+      // Create all subdepartments
+      const createdSubDepartments = await Promise.all(
+        subDepartments.map(async (subDeptName) => {
+          const newSubDepartment = new SubDepartment({
+            name: subDeptName,
+            departmentId: department._id,
+          });
+          return await newSubDepartment.save();
+        })
+      );
+
+      res.json({
+        department,
+        subDepartments: createdSubDepartments,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
 // Get all subDepartments
 app.get("/api/subDepartments", async (req, res) => {
   try {
@@ -552,34 +601,38 @@ app.put(
 );
 
 // Transfer trainees between subdepartments
-app.put("/api/trainees/transfer-subdepartment", authMiddleware, async (req, res) => {
-  const { oldSubDepartmentId, newSubDepartmentId } = req.body;
+app.put(
+  "/api/trainees/transfer-subdepartment",
+  authMiddleware,
+  async (req, res) => {
+    const { oldSubDepartmentId, newSubDepartmentId } = req.body;
 
-  try {
-    // Get the new subdepartment to verify it exists and get its departmentId
-    const newSubDepartment = await SubDepartment.findById(newSubDepartmentId);
-    if (!newSubDepartment) {
-      return res.status(404).json({ message: "תת-המסגרת החדשה לא נמצאה" });
-    }
-
-    // Update all trainees in the old subdepartment with both new subdepartment and department
-    const result = await Trainee.updateMany(
-      { subDepartmentId: oldSubDepartmentId },
-      { 
-        subDepartmentId: newSubDepartmentId,
-        departmentId: newSubDepartment.departmentId // Update the departmentId to match the new subdepartment's department
+    try {
+      // Get the new subdepartment to verify it exists and get its departmentId
+      const newSubDepartment = await SubDepartment.findById(newSubDepartmentId);
+      if (!newSubDepartment) {
+        return res.status(404).json({ message: "תת-המסגרת החדשה לא נמצאה" });
       }
-    );
 
-    res.json({
-      message: `הועברו ${result.modifiedCount} חניכים לתת-המסגרת החדשה`,
-      modifiedCount: result.modifiedCount
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "שגיאת שרת" });
+      // Update all trainees in the old subdepartment with both new subdepartment and department
+      const result = await Trainee.updateMany(
+        { subDepartmentId: oldSubDepartmentId },
+        {
+          subDepartmentId: newSubDepartmentId,
+          departmentId: newSubDepartment.departmentId, // Update the departmentId to match the new subdepartment's department
+        }
+      );
+
+      res.json({
+        message: `הועברו ${result.modifiedCount} חניכים לתת-המסגרת החדשה`,
+        modifiedCount: result.modifiedCount,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "שגיאת שרת" });
+    }
   }
-});
+);
 
 // Entry routes
 app.get("/api/entries", async (req, res) => {
@@ -633,7 +686,7 @@ app.post("/api/entries", async (req, res) => {
 
     const entry = await newEntry.save();
 
-        // Emit the new entry event
+    // Emit the new entry event
     const emitNewEntry = req.app.get("emitNewEntry");
     emitNewEntry(entry, entry.baseId);
 
@@ -686,7 +739,7 @@ app.post("/api/admins", authMiddleware, async (req, res) => {
   }
 });
 // Paginated entries route
-app.get("/api/entries/paginated", async (req, res) => {
+app.get("/api/entries/paginated", authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20; // Fixed limit
@@ -704,7 +757,7 @@ app.get("/api/entries/paginated", async (req, res) => {
       query.subDepartmentId = req.query.subDepartmentId;
     }
 
-    if (req.query.baseId) {
+    if (req.query.baseId && req.admin.role === "gymAdmin") {
       query.baseId = req.query.baseId;
     }
 
@@ -760,14 +813,14 @@ app.put("/api/bases/:id", authMiddleware, async (req, res) => {
 
   try {
     const base = await Base.findById(baseId);
-    
+
     if (!base) {
       return res.status(404).json({ message: "Base not found" });
     }
-    
+
     base.name = name;
     base.location = location;
-    
+
     const updatedBase = await base.save();
     res.json(updatedBase);
   } catch (err) {
@@ -790,23 +843,25 @@ app.delete("/api/bases/:id", authMiddleware, async (req, res) => {
     if (!base) {
       return res.status(404).json({ message: "Base not found" });
     }
-    
+
     // Check if base is being used by departments
     const departmentsCount = await Department.countDocuments({ baseId });
     if (departmentsCount > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete base with associated departments. Delete the departments first." 
+      return res.status(400).json({
+        message:
+          "Cannot delete base with associated departments. Delete the departments first.",
       });
     }
-    
+
     // Check if base is being used by admins
     const adminsCount = await Admin.countDocuments({ baseId });
     if (adminsCount > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete base with associated administrators. Change admin associations first." 
+      return res.status(400).json({
+        message:
+          "Cannot delete base with associated administrators. Change admin associations first.",
       });
     }
-    
+
     // Delete the base
     await Base.findByIdAndDelete(baseId);
     res.json({ message: "Base deleted successfully" });
@@ -823,11 +878,11 @@ app.put("/api/departments/:id", authMiddleware, async (req, res) => {
 
   try {
     const department = await Department.findById(departmentId);
-    
+
     if (!department) {
       return res.status(404).json({ message: "Department not found" });
     }
-    
+
     // Check if the admin is authorized for this base
     if (
       req.admin.role === "gymAdmin" &&
@@ -835,10 +890,10 @@ app.put("/api/departments/:id", authMiddleware, async (req, res) => {
     ) {
       return res.status(403).json({ message: "Not authorized for this base" });
     }
-    
+
     department.name = name;
     department.baseId = baseId;
-    
+
     const updatedDepartment = await department.save();
     res.json(updatedDepartment);
   } catch (err) {
@@ -856,31 +911,37 @@ app.delete("/api/departments/:id", authMiddleware, async (req, res) => {
     if (!department) {
       return res.status(404).json({ message: "Department not found" });
     }
-    
+
     // Check if admin is authorized for this department's base
     if (
       req.admin.role === "gymAdmin" &&
       req.admin.baseId.toString() !== department.baseId.toString()
     ) {
-      return res.status(403).json({ message: "Not authorized for this department" });
+      return res
+        .status(403)
+        .json({ message: "Not authorized for this department" });
     }
-    
+
     // Check if department is being used by subdepartments
-    const subDepartmentsCount = await SubDepartment.countDocuments({ departmentId });
+    const subDepartmentsCount = await SubDepartment.countDocuments({
+      departmentId,
+    });
     if (subDepartmentsCount > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete department with associated sub-departments. Delete the sub-departments first." 
+      return res.status(400).json({
+        message:
+          "Cannot delete department with associated sub-departments. Delete the sub-departments first.",
       });
     }
-    
+
     // Check if department is being used by trainees
     const traineesCount = await Trainee.countDocuments({ departmentId });
     if (traineesCount > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete department with associated trainees. Change trainee associations first." 
+      return res.status(400).json({
+        message:
+          "Cannot delete department with associated trainees. Change trainee associations first.",
       });
     }
-    
+
     // Delete the department
     await Department.findByIdAndDelete(departmentId);
     res.json({ message: "Department deleted successfully" });
@@ -894,31 +955,33 @@ app.delete("/api/departments/:id", authMiddleware, async (req, res) => {
 app.put("/api/subDepartments/:id", authMiddleware, async (req, res) => {
   const { name, departmentId } = req.body;
   const subDepartmentId = req.params.id;
-  
+
   try {
     // Check if the subDepartment exists
     const subDepartment = await SubDepartment.findById(subDepartmentId);
     if (!subDepartment) {
       return res.status(404).json({ message: "SubDepartment not found" });
     }
-    
+
     // Check if the department exists
     const department = await Department.findById(departmentId);
     if (!department) {
       return res.status(404).json({ message: "Department not found" });
     }
-    
+
     // Check if the admin is authorized for this department's base
     if (
       req.admin.role === "gymAdmin" &&
       req.admin.baseId.toString() !== department.baseId.toString()
     ) {
-      return res.status(403).json({ message: "Not authorized for this department" });
+      return res
+        .status(403)
+        .json({ message: "Not authorized for this department" });
     }
-    
+
     subDepartment.name = name;
     subDepartment.departmentId = departmentId;
-    
+
     const updatedSubDepartment = await subDepartment.save();
     res.json(updatedSubDepartment);
   } catch (err) {
@@ -936,29 +999,34 @@ app.delete("/api/subDepartments/:id", authMiddleware, async (req, res) => {
     if (!subDepartment) {
       return res.status(404).json({ message: "SubDepartment not found" });
     }
-    
+
     // Get the department to check base permission
     const department = await Department.findById(subDepartment.departmentId);
     if (!department) {
-      return res.status(404).json({ message: "Associated department not found" });
+      return res
+        .status(404)
+        .json({ message: "Associated department not found" });
     }
-    
+
     // Check if admin is authorized for this department's base
     if (
       req.admin.role === "gymAdmin" &&
       req.admin.baseId.toString() !== department.baseId.toString()
     ) {
-      return res.status(403).json({ message: "Not authorized for this sub-department" });
+      return res
+        .status(403)
+        .json({ message: "Not authorized for this sub-department" });
     }
-    
+
     // Check if subDepartment is being used by trainees
     const traineesCount = await Trainee.countDocuments({ subDepartmentId });
     if (traineesCount > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete sub-department with associated trainees. Change trainee associations first." 
+      return res.status(400).json({
+        message:
+          "Cannot delete sub-department with associated trainees. Change trainee associations first.",
       });
     }
-    
+
     // Delete the subDepartment
     await SubDepartment.findByIdAndDelete(subDepartmentId);
     res.json({ message: "SubDepartment deleted successfully" });
@@ -966,7 +1034,7 @@ app.delete("/api/subDepartments/:id", authMiddleware, async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   }
-});// Paginated trainees route with filtering
+}); // Paginated trainees route with filtering
 app.get("/api/trainees/paginated", authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -1136,6 +1204,60 @@ app.put("/api/trainees/:id", authMiddleware, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "שגיאת שרת" });
+  }
+});
+
+// Add new search route
+app.get("/api/departments/search", authMiddleware, async (req, res) => {
+  try {
+    const { query } = req.query;
+    const admin = req.admin;
+
+    if (!admin) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    let baseDepartmentsIds;
+    if (admin?.role !== "generalAdmin") {
+      // Get all departments from the base
+      baseDepartmentsIds = (
+        await Department.find({
+          baseId: admin.baseId,
+        })
+      ).map((dept) => dept._id);
+    }
+
+    // Get the relevant subdepartments
+    const subDepartments = await SubDepartment.find({
+      name: { $regex: query.toLowerCase() },
+      ...(admin?.role !== "generalAdmin" && {
+        departmentId: { $in: baseDepartmentsIds },
+      }),
+    });
+
+    // Get unique department IDs that contain matching subdepartments
+    const departmentIdsWithMatchingSubs = [
+      ...new Set(subDepartments.map((sub) => sub.departmentId)),
+    ];
+
+    // Get departments that match the query or contain matching subdepartments
+    const departments = await Department.find({
+      $or: [
+        {
+          name: { $regex: query.toLowerCase() },
+          ...(admin?.role === "gymAdmin" && { baseId: admin.baseId }),
+        },
+        { _id: { $in: departmentIdsWithMatchingSubs } },
+      ],
+    });
+
+    res.json({
+      departments,
+      subDepartments,
+    });
+  } catch (error) {
+    console.error("Error searching departments:", error);
+    res.status(500).json({ message: "Error searching departments" });
   }
 });
 
