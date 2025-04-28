@@ -830,7 +830,7 @@ app.delete("/api/bases/:id", authMiddleware, async (req, res) => {
 
 // Department update routes
 app.put("/api/departments/:id", authMiddleware, async (req, res) => {
-  const { name, baseId } = req.body;
+  const { name, numOfPeople } = req.body;
   const departmentId = req.params.id;
 
   try {
@@ -843,13 +843,13 @@ app.put("/api/departments/:id", authMiddleware, async (req, res) => {
     // Check if the admin is authorized for this base
     if (
       req.admin.role === "gymAdmin" &&
-      req.admin.baseId.toString() !== baseId
+      req.admin.baseId.toString() !== department?.baseId?.toString()
     ) {
       return res.status(403).json({ message: "Not authorized for this base" });
     }
 
     department.name = name;
-    department.baseId = baseId;
+    department.numOfPeople = numOfPeople;
 
     const updatedDepartment = await department.save();
     res.json(updatedDepartment);
