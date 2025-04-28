@@ -1152,7 +1152,7 @@ app.post(
   "/api/departments/with-subdepartments",
   authMiddleware,
   async (req, res) => {
-    const { name, baseId, subDepartments } = req.body;
+    const { name, baseId, subDepartments, numOfPeople } = req.body;
 
     try {
       // Check if the admin is authorized for this base
@@ -1169,6 +1169,7 @@ app.post(
       const newDepartment = new Department({
         name,
         baseId,
+        numOfPeople,
       });
 
       const department = await newDepartment.save();
