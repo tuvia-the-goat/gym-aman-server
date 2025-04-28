@@ -1067,6 +1067,78 @@ app.get("/api/trainees/last-week", authMiddleware, async (req, res) => {
   }
 });
 
+// Update trainee profile
+app.put("/api/trainees/:id", authMiddleware, async (req, res) => {
+  const {
+    personalId,
+    fullName,
+    medicalProfile,
+    departmentId,
+    subDepartmentId,
+    baseId,
+    gender,
+    birthDate,
+    orthopedicCondition,
+    medicalFormScore,
+    medicalCertificateProvided,
+    medicalLimitation,
+    medicalApproval,
+  } = req.body;
+
+  try {
+    console.log(gender);
+    
+    const trainee = await Trainee.findById(req.params.id);
+
+    if (!trainee) {
+      return res.status(404).json({ message: "המתאמן לא נמצא" });
+    }
+
+    // Check if the admin is authorized for this base
+    if (
+      req.admin.role === "gymAdmin" &&
+      req.admin.baseId.toString() !== baseId
+    ) {
+      return res.status(403).json({ message: "אין הרשאה לעדכן מתאמן זה" });
+    }
+
+    // Check if personalId is being changed and if it already exists
+    if (personalId !== trainee.personalId) {
+      const existingTrainee = await Trainee.findOne({ personalId });
+      if (existingTrainee) {
+        return res.status(400).json({ message: "מספר אישי כבר קיים במערכת" });
+      }
+    }
+
+    // Update trainee fields
+    trainee.personalId = personalId;
+    trainee.fullName = fullName;
+    trainee.medicalProfile = medicalProfile;
+    trainee.departmentId = departmentId;
+    trainee.subDepartmentId = subDepartmentId;
+    trainee.baseId = baseId;
+    trainee.gender = gender;
+    trainee.birthDate = birthDate;
+    trainee.orthopedicCondition = orthopedicCondition;
+    trainee.medicalFormScore = medicalFormScore;
+    trainee.medicalApproval = medicalApproval;
+
+    // Update optional fields if provided
+    if (medicalCertificateProvided !== undefined) {
+      trainee.medicalCertificateProvided = medicalCertificateProvided;
+    }
+    if (medicalLimitation !== undefined) {
+      trainee.medicalLimitation = medicalLimitation;
+    }
+
+    const updatedTrainee = await trainee.save();
+    res.json(updatedTrainee);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "שגיאת שרת" });
+  }
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
