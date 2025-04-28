@@ -1141,49 +1141,47 @@ app.get("/api/departments/search", authMiddleware, async (req, res) => {
     const { query } = req.query;
     const admin = req.admin;
 
-    // Get all departments and subdepartments
-    const departments = await Department.find();
-    const subDepartments = await SubDepartment.find();
+    if (!admin) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
 
-    // Filter departments and subdepartments based on query and admin permissions
-    const filteredDepartments = departments.filter((dept) => {
-      const matchesQuery = dept.name
-        .toLowerCase()
-        .includes(query.toLowerCase());
-      const hasPermission =
-        admin.role === "generalAdmin" || dept.baseId === admin.baseId;
-      return matchesQuery && hasPermission;
-    });
+    let baseDepartmentsIds;
+    if (admin?.role !== "generalAdmin") {
+      // Get all departments from the base
+      baseDepartmentsIds = (
+        await Department.find({
+          baseId: admin.baseId,
+        })
+      ).map((dept) => dept._id);
+    }
 
-    const filteredSubDepartments = subDepartments.filter((subDept) => {
-      const matchesQuery = subDept.name
-        .toLowerCase()
-        .includes(query.toLowerCase());
-      const department = departments.find(
-        (d) => d._id === subDept.departmentId
-      );
-      const hasPermission =
-        admin.role === "generalAdmin" ||
-        (department && department.baseId === admin.baseId);
-      return matchesQuery && hasPermission;
+    // Get the relevant subdepartments
+    const subDepartments = await SubDepartment.find({
+      name: { $regex: query.toLowerCase() },
+      ...(admin?.role !== "generalAdmin" && {
+        departmentId: { $in: baseDepartmentsIds },
+      }),
     });
 
     // Get unique department IDs that contain matching subdepartments
     const departmentIdsWithMatchingSubs = [
-      ...new Set(filteredSubDepartments.map((sub) => sub.departmentId)),
+      ...new Set(subDepartments.map((sub) => sub.departmentId)),
     ];
 
-    // Get all departments that either match directly or contain matching subdepartments
-    const relevantDepartments = await Department.find({
+    // Get departments that match the query or contain matching subdepartments
+    const departments = await Department.find({
       $or: [
-        { _id: { $in: filteredDepartments.map((d) => d._id) } },
+        {
+          name: { $regex: query.toLowerCase() },
+          ...(admin?.role === "gymAdmin" && { baseId: admin.baseId }),
+        },
         { _id: { $in: departmentIdsWithMatchingSubs } },
       ],
     });
 
     res.json({
-      departments: relevantDepartments,
-      subDepartments: filteredSubDepartments,
+      departments,
+      subDepartments,
     });
   } catch (error) {
     console.error("Error searching departments:", error);
