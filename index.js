@@ -762,17 +762,22 @@ app.get("/api/entries/paginated", authMiddleware, async (req, res) => {
     // Build filter query
     const query = {};
 
-    // Apply filters if provided
+    // Apply base filter based on admin role
+    if (req.admin.role === "gymAdmin") {
+      // Gym admins can only see their own base
+      query.baseId = req.admin.baseId;
+    } else if (req.admin.role === "generalAdmin" && req.query.baseId) {
+      // General admins can see specific base or all bases
+      query.baseId = req.query.baseId;
+    }
+
+    // Apply other filters if provided
     if (req.query.departmentId) {
       query.departmentId = req.query.departmentId;
     }
 
     if (req.query.subDepartmentId) {
       query.subDepartmentId = req.query.subDepartmentId;
-    }
-
-    if (req.query.baseId && req.admin.role === "gymAdmin") {
-      query.baseId = req.query.baseId;
     }
 
     if (req.query.search) {
