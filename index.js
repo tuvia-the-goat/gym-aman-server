@@ -1276,6 +1276,54 @@ app.post(
   }
 );
 
+// Lazy load trainees with pagination, search, and filtering
+app.get("/api/trainees/lazy", authMiddleware, async (req, res) => {
+  const { skip = 0, limit = 30, search, baseId } = req.query;
+
+  console.log({ skip, limit, search, baseId });
+
+  try {
+    // Build query based on filters
+    let query = {};
+
+    // Add baseId filter for gym admins
+    if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    } else if (baseId) {
+      query.baseId = baseId;
+    }
+
+    // Add search filter if provided
+    if (search) {
+      query.$or = [
+        { fullName: { $regex: search } },
+        { personalId: { $regex: search } },
+      ];
+    }
+
+    // Get total count for pagination
+    const total = await Trainee.countDocuments(query);
+
+    // Get trainees with pagination, sorted by department
+    const trainees = await Trainee.find(query)
+      .sort({ departmentId: 1, subDepartmentId: 1, fullName: 1 })
+      .skip(Number(skip))
+      .limit(Number(limit));
+
+    // Calculate if there are more results
+    const hasMore = total > Number(skip) + trainees.length;
+
+    res.json({
+      trainees,
+      hasMore,
+      total,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
