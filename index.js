@@ -695,6 +695,56 @@ app.post("/api/admins", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// Get all admins
+app.get("/api/admins", authMiddleware, async (req, res) => {
+  // Only allBasesAdmin can get all admins
+  if (req.admin.role !== "generalAdmin") {
+    return res.status(403).json({ message: "Not authorized" });
+  }
+
+  try {
+    const admins = await Admin.find().select("-password");
+    res.json(admins);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Reset admin password
+app.put("/api/admins/:id/reset-password", authMiddleware, async (req, res) => {
+  // Only allBasesAdmin can reset passwords
+  if (req.admin.role !== "generalAdmin") {
+    return res.status(403).json({ message: "Not authorized" });
+  }
+
+  const { newPassword } = req.body;
+  if (!newPassword) {
+    return res.status(400).json({ message: "New password is required" });
+  }
+
+  try {
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    const admin = await Admin.findByIdAndUpdate(
+      req.params.id,
+      { password: hashedPassword },
+      { new: true }
+    ).select("-password");
+
+    if (!admin) {
+      return res.status(404).json({ message: "Admin not found" });
+    }
+
+    res.json(admin);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Paginated entries route
 app.get("/api/entries/paginated", authMiddleware, async (req, res) => {
   try {
