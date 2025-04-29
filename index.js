@@ -66,6 +66,7 @@ const BaseSchema = new mongoose.Schema({
 const DepartmentSchema = new mongoose.Schema({
   name: { type: String, required: true },
   baseId: { type: mongoose.Schema.Types.ObjectId, ref: "Base", required: true },
+  numOfPeople: { type: Number, default: 0 },
 });
 
 const SubDepartmentSchema = new mongoose.Schema({
@@ -75,6 +76,7 @@ const SubDepartmentSchema = new mongoose.Schema({
     ref: "Department",
     required: true,
   },
+  numOfPeople: { type: Number, default: 0 },
 });
 
 const TraineeSchema = new mongoose.Schema({
@@ -180,6 +182,7 @@ app.get("/api/initialize", async (req, res) => {
       const defaultDepartment = new Department({
         name: "ארטק",
         baseId: defaultBase._id,
+        numOfPeople: 0,
       });
       await defaultDepartment.save();
 
@@ -340,7 +343,7 @@ app.get("/api/departments", async (req, res) => {
 });
 
 app.post("/api/departments", authMiddleware, async (req, res) => {
-  const { name, baseId } = req.body;
+  const { name, baseId, numOfPeople } = req.body;
 
   try {
     // Check if the admin is authorized for this base
@@ -354,6 +357,7 @@ app.post("/api/departments", authMiddleware, async (req, res) => {
     const newDepartment = new Department({
       name,
       baseId,
+      numOfPeople,
     });
 
     const department = await newDepartment.save();
@@ -363,54 +367,6 @@ app.post("/api/departments", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-// Create department with multiple subdepartments
-app.post(
-  "/api/departments/with-subdepartments",
-  authMiddleware,
-  async (req, res) => {
-    const { name, baseId, subDepartments } = req.body;
-
-    try {
-      // Check if the admin is authorized for this base
-      if (
-        req.admin.role === "gymAdmin" &&
-        req.admin.baseId.toString() !== baseId
-      ) {
-        return res
-          .status(403)
-          .json({ message: "Not authorized for this base" });
-      }
-
-      // Create the department
-      const newDepartment = new Department({
-        name,
-        baseId,
-      });
-
-      const department = await newDepartment.save();
-
-      // Create all subdepartments
-      const createdSubDepartments = await Promise.all(
-        subDepartments.map(async (subDeptName) => {
-          const newSubDepartment = new SubDepartment({
-            name: subDeptName,
-            departmentId: department._id,
-          });
-          return await newSubDepartment.save();
-        })
-      );
-
-      res.json({
-        department,
-        subDepartments: createdSubDepartments,
-      });
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Server error" });
-    }
-  }
-);
 
 // Get all subDepartments
 app.get("/api/subDepartments", async (req, res) => {
@@ -438,7 +394,7 @@ app.get("/api/subDepartments/department/:departmentId", async (req, res) => {
 
 // Create new subDepartment
 app.post("/api/subDepartments", authMiddleware, async (req, res) => {
-  const { name, departmentId } = req.body;
+  const { name, departmentId, numOfPeople } = req.body;
 
   try {
     // Check if the department exists
@@ -460,6 +416,7 @@ app.post("/api/subDepartments", authMiddleware, async (req, res) => {
     const newSubDepartment = new SubDepartment({
       name,
       departmentId,
+      numOfPeople,
     });
 
     const subDepartment = await newSubDepartment.save();
@@ -873,7 +830,7 @@ app.delete("/api/bases/:id", authMiddleware, async (req, res) => {
 
 // Department update routes
 app.put("/api/departments/:id", authMiddleware, async (req, res) => {
-  const { name, baseId } = req.body;
+  const { name, numOfPeople } = req.body;
   const departmentId = req.params.id;
 
   try {
@@ -886,13 +843,13 @@ app.put("/api/departments/:id", authMiddleware, async (req, res) => {
     // Check if the admin is authorized for this base
     if (
       req.admin.role === "gymAdmin" &&
-      req.admin.baseId.toString() !== baseId
+      req.admin.baseId.toString() !== department?.baseId?.toString()
     ) {
       return res.status(403).json({ message: "Not authorized for this base" });
     }
 
     department.name = name;
-    department.baseId = baseId;
+    department.numOfPeople = numOfPeople;
 
     const updatedDepartment = await department.save();
     res.json(updatedDepartment);
@@ -953,7 +910,7 @@ app.delete("/api/departments/:id", authMiddleware, async (req, res) => {
 
 // SubDepartment update routes
 app.put("/api/subDepartments/:id", authMiddleware, async (req, res) => {
-  const { name, departmentId } = req.body;
+  const { name, departmentId, numOfPeople } = req.body;
   const subDepartmentId = req.params.id;
 
   try {
@@ -981,6 +938,7 @@ app.put("/api/subDepartments/:id", authMiddleware, async (req, res) => {
 
     subDepartment.name = name;
     subDepartment.departmentId = departmentId;
+    subDepartment.numOfPeople = numOfPeople;
 
     const updatedSubDepartment = await subDepartment.save();
     res.json(updatedSubDepartment);
@@ -1260,6 +1218,56 @@ app.get("/api/departments/search", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Error searching departments" });
   }
 });
+
+// Create department with multiple subdepartments
+app.post(
+  "/api/departments/with-subdepartments",
+  authMiddleware,
+  async (req, res) => {
+    const { name, baseId, subDepartments, numOfPeople } = req.body;
+
+    try {
+      // Check if the admin is authorized for this base
+      if (
+        req.admin.role === "gymAdmin" &&
+        req.admin.baseId.toString() !== baseId
+      ) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized for this base" });
+      }
+
+      // Create the department
+      const newDepartment = new Department({
+        name,
+        baseId,
+        numOfPeople,
+      });
+
+      const department = await newDepartment.save();
+
+      // Create all subdepartments
+      const createdSubDepartments = await Promise.all(
+        subDepartments.map(async ({ name, numOfPeople }) => {
+          const newSubDepartment = new SubDepartment({
+            name,
+            departmentId: department._id,
+            numOfPeople,
+          });
+          return await newSubDepartment.save();
+        })
+      );
+
+      res.json({
+        department,
+        subDepartments: createdSubDepartments,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
 
 // Start server
 server.listen(PORT, () => {
