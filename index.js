@@ -616,14 +616,21 @@ app.post("/api/entries", async (req, res) => {
     status, // Add subDepartmentId here
   } = req.body;
 
+  console.log({
+    traineePersonalId,
+    entryDate,
+  });
+
   try {
     // Check if trainee already entered today
     const existingEntry = await Entry.findOne({
       traineePersonalId,
       entryDate,
+      baseId,
+      status: { $in: [EntryStatus.SUCCESS, EntryStatus.NOT_ASSOCIATED] },
     });
 
-    if (existingEntry && existingEntry.status === EntryStatus.SUCCESS) {
+    if (existingEntry) {
       return res
         .status(400)
         .json({ message: "המשתמש כבר נכנס היום, הצהרת בריאות בתוקף" });
@@ -1113,7 +1120,7 @@ app.put("/api/trainees/:id", authMiddleware, async (req, res) => {
 
   try {
     console.log(gender);
-    
+
     const trainee = await Trainee.findById(req.params.id);
 
     if (!trainee) {
