@@ -1331,6 +1331,54 @@ app.post(
   }
 );
 
+// Paginated departments route
+app.get("/api/departments/paginated", authMiddleware, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Build filter query
+    const query = {};
+
+    // Apply base filter based on admin role
+    if (req.admin.role === "gymAdmin") {
+      // Gym admins can only see their own base
+      query.baseId = req.admin.baseId;
+    } else if (req.admin.role === "generalAdmin" && req.query.baseId) {
+      // General admins can see specific base or all bases
+      query.baseId = req.query.baseId;
+    }
+
+    // Apply search filter if provided
+    if (req.query.search) {
+      query.name = { $regex: req.query.search, $options: "i" };
+    }
+
+    // Get total count
+    const total = await Department.countDocuments(query);
+
+    // Get paginated departments
+    const departments = await Department.find(query)
+      .sort({ name: 1 }) // Sort by name
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      departments,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
