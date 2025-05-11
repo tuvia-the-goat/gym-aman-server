@@ -264,8 +264,21 @@ app.get("/api/auth/verify", authMiddleware, async (req, res) => {
 app.get("/api/bases", async (req, res) => {
   try {
     const bases = await Base.find();
-
     res.json(bases);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get base by ID
+app.get("/api/bases/:id", async (req, res) => {
+  try {
+    const base = await Base.findById(req.params.id);
+    if (!base) {
+      return res.status(404).json({ message: "Base not found" });
+    }
+    res.json(base);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -1375,6 +1388,241 @@ app.get("/api/departments/paginated", authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get today's successful entries
+app.get("/api/entries/today-successful", authMiddleware, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const query = {
+      entryDate: today,
+      status: "success",
+    };
+
+    // Apply base filter if provided
+    if (req.query.baseId) {
+      query.baseId = req.query.baseId;
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    const count = await Entry.countDocuments(query);
+    res.json({ count });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get all successful entries today without base filtering
+app.get("/api/entries/today-successful-all", authMiddleware, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const query = {
+      entryDate: today,
+      status: "success",
+    };
+
+    const count = await Entry.countDocuments(query);
+    res.json({ count });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get entries from last hour
+app.get("/api/entries/last-hour", authMiddleware, async (req, res) => {
+  try {
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    const query = {
+      $or: [
+        {
+          entryDate: now.toISOString().split("T")[0],
+          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] }
+        },
+        {
+          entryDate: oneHourAgo.toISOString().split("T")[0],
+          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] }
+        }
+      ]
+    };
+
+    // Apply base filter if provided
+    if (req.query.baseId) {
+      query.baseId = req.query.baseId;
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    const entries = await Entry.find(query)
+      .sort({ entryDate: -1, entryTime: -1 })
+      .limit(10);
+
+    res.json(entries);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get medical approval stats
+app.get("/api/trainees/medical-approval-stats", authMiddleware, async (req, res) => {
+  try {
+    const query = {};
+
+    // Apply base filter if provided
+    if (req.query.baseId) {
+      query.baseId = req.query.baseId;
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    const now = new Date();
+    const approved = await Trainee.countDocuments({
+      ...query,
+      "medicalApproval.approved": true,
+      "medicalApproval.expirationDate": { $gt: now }
+    });
+
+    const notApproved = await Trainee.countDocuments({
+      ...query,
+      $or: [
+        { "medicalApproval.approved": false },
+        { "medicalApproval.expirationDate": { $lte: now } }
+      ]
+    });
+
+    res.json({ approved, notApproved });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get top trainees from last month
+app.get("/api/trainees/top", authMiddleware, async (req, res) => {
+  try {
+    const now = new Date();
+    const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Build match conditions
+    const matchConditions = {
+      entryDate: {
+        $gte: lastMonth.toISOString().split("T")[0],
+        $lte: now.toISOString().split("T")[0]
+      },
+      status: EntryStatus.SUCCESS,
+      traineeId: { $exists: true, $ne: null }
+    };
+
+    if (req.query.baseId) {
+      matchConditions.baseId = new mongoose.Types.ObjectId(req.query.baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      matchConditions.baseId = new mongoose.Types.ObjectId(req.admin.baseId);
+    }
+
+    // Use aggregation pipeline to get top trainees in a single query
+    const topTrainees = await Entry.aggregate([
+      // Match entries from last month with success status
+      {
+        $match: matchConditions
+      },
+      {
+        $group: {
+          _id: "$traineeId",
+          count: { $sum: 1 }
+        }
+      },
+      // Sort by count in descending order
+      {
+        $sort: { count: -1 }
+      },
+      // Limit to top 7
+      {
+        $limit: 7
+      },
+      // Lookup trainee details
+      {
+        $lookup: {
+          from: "trainees",
+          localField: "_id",
+          foreignField: "_id",
+          as: "trainee"
+        }
+      },
+      // Unwind trainee array
+      {
+        $unwind: "$trainee"
+      },
+      // Lookup department details
+      {
+        $lookup: {
+          from: "departments",
+          localField: "trainee.departmentId",
+          foreignField: "_id",
+          as: "department"
+        }
+      },
+      // Unwind department array
+      {
+        $unwind: {
+          path: "$department",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      // Lookup subdepartment details
+      {
+        $lookup: {
+          from: "subdepartments",
+          localField: "trainee.subDepartmentId",
+          foreignField: "_id",
+          as: "subDepartment"
+        }
+      },
+      // Unwind subdepartment array
+      {
+        $unwind: {
+          path: "$subDepartment",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      // Lookup base details if general admin
+      ...(req.admin.role === "generalAdmin" ? [{
+        $lookup: {
+          from: "bases",
+          localField: "trainee.baseId",
+          foreignField: "_id",
+          as: "base"
+        }
+      }, {
+        $unwind: {
+          path: "$base",
+          preserveNullAndEmptyArrays: true
+        }
+      }] : []),
+      // Project final format
+      {
+        $project: {
+          id: "$_id",
+          name: "$trainee.fullName",
+          count: 1,
+          departmentName: { $ifNull: ["$department.name", "-"] },
+          subDepartmentName: { $ifNull: ["$subDepartment.name", "-"] },
+          ...(req.admin.role === "generalAdmin" && {
+            baseName: { $ifNull: ["$base.name", "-"] }
+          })
+        }
+      }
+    ]);
+    
+    res.json(topTrainees);
+  } catch (err) {
+    console.error('Error in top trainees:', err);
     res.status(500).json({ message: "Server error" });
   }
 });
