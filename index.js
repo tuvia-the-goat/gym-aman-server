@@ -1417,21 +1417,25 @@ app.get("/api/entries/today-successful", authMiddleware, async (req, res) => {
 });
 
 // Get all successful entries today without base filtering
-app.get("/api/entries/today-successful-all", authMiddleware, async (req, res) => {
-  try {
-    const today = new Date().toISOString().split("T")[0];
-    const query = {
-      entryDate: today,
-      status: "success",
-    };
+app.get(
+  "/api/entries/today-successful-all",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const query = {
+        entryDate: today,
+        status: "success",
+      };
 
-    const count = await Entry.countDocuments(query);
-    res.json({ count });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+      const count = await Entry.countDocuments(query);
+      res.json({ count });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Server error" });
+    }
   }
-});
+);
 
 // Get entries from last hour
 app.get("/api/entries/last-hour", authMiddleware, async (req, res) => {
@@ -1443,13 +1447,13 @@ app.get("/api/entries/last-hour", authMiddleware, async (req, res) => {
       $or: [
         {
           entryDate: now.toISOString().split("T")[0],
-          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] }
+          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] },
         },
         {
           entryDate: oneHourAgo.toISOString().split("T")[0],
-          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] }
-        }
-      ]
+          entryTime: { $gte: oneHourAgo.toTimeString().split(" ")[0] },
+        },
+      ],
     };
 
     // Apply base filter if provided
@@ -1471,38 +1475,42 @@ app.get("/api/entries/last-hour", authMiddleware, async (req, res) => {
 });
 
 // Get medical approval stats
-app.get("/api/trainees/medical-approval-stats", authMiddleware, async (req, res) => {
-  try {
-    const query = {};
+app.get(
+  "/api/trainees/medical-approval-stats",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const query = {};
 
-    // Apply base filter if provided
-    if (req.query.baseId) {
-      query.baseId = req.query.baseId;
-    } else if (req.admin.role === "gymAdmin") {
-      query.baseId = req.admin.baseId;
+      // Apply base filter if provided
+      if (req.query.baseId) {
+        query.baseId = req.query.baseId;
+      } else if (req.admin.role === "gymAdmin") {
+        query.baseId = req.admin.baseId;
+      }
+
+      const now = new Date();
+      const approved = await Trainee.countDocuments({
+        ...query,
+        "medicalApproval.approved": true,
+        "medicalApproval.expirationDate": { $gt: now },
+      });
+
+      const notApproved = await Trainee.countDocuments({
+        ...query,
+        $or: [
+          { "medicalApproval.approved": false },
+          { "medicalApproval.expirationDate": { $lte: now } },
+        ],
+      });
+
+      res.json({ approved, notApproved });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Server error" });
     }
-
-    const now = new Date();
-    const approved = await Trainee.countDocuments({
-      ...query,
-      "medicalApproval.approved": true,
-      "medicalApproval.expirationDate": { $gt: now }
-    });
-
-    const notApproved = await Trainee.countDocuments({
-      ...query,
-      $or: [
-        { "medicalApproval.approved": false },
-        { "medicalApproval.expirationDate": { $lte: now } }
-      ]
-    });
-
-    res.json({ approved, notApproved });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
   }
-});
+);
 
 // Get top trainees from last month
 app.get("/api/trainees/top", authMiddleware, async (req, res) => {
@@ -1514,10 +1522,10 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
     const matchConditions = {
       entryDate: {
         $gte: lastMonth.toISOString().split("T")[0],
-        $lte: now.toISOString().split("T")[0]
+        $lte: now.toISOString().split("T")[0],
       },
       status: EntryStatus.SUCCESS,
-      traineeId: { $exists: true, $ne: null }
+      traineeId: { $exists: true, $ne: null },
     };
 
     if (req.query.baseId) {
@@ -1530,21 +1538,21 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
     const topTrainees = await Entry.aggregate([
       // Match entries from last month with success status
       {
-        $match: matchConditions
+        $match: matchConditions,
       },
       {
         $group: {
           _id: "$traineeId",
-          count: { $sum: 1 }
-        }
+          count: { $sum: 1 },
+        },
       },
       // Sort by count in descending order
       {
-        $sort: { count: -1 }
+        $sort: { count: -1 },
       },
       // Limit to top 7
       {
-        $limit: 7
+        $limit: 7,
       },
       // Lookup trainee details
       {
@@ -1552,12 +1560,12 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
           from: "trainees",
           localField: "_id",
           foreignField: "_id",
-          as: "trainee"
-        }
+          as: "trainee",
+        },
       },
       // Unwind trainee array
       {
-        $unwind: "$trainee"
+        $unwind: "$trainee",
       },
       // Lookup department details
       {
@@ -1565,15 +1573,15 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
           from: "departments",
           localField: "trainee.departmentId",
           foreignField: "_id",
-          as: "department"
-        }
+          as: "department",
+        },
       },
       // Unwind department array
       {
         $unwind: {
           path: "$department",
-          preserveNullAndEmptyArrays: true
-        }
+          preserveNullAndEmptyArrays: true,
+        },
       },
       // Lookup subdepartment details
       {
@@ -1581,30 +1589,35 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
           from: "subdepartments",
           localField: "trainee.subDepartmentId",
           foreignField: "_id",
-          as: "subDepartment"
-        }
+          as: "subDepartment",
+        },
       },
       // Unwind subdepartment array
       {
         $unwind: {
           path: "$subDepartment",
-          preserveNullAndEmptyArrays: true
-        }
+          preserveNullAndEmptyArrays: true,
+        },
       },
       // Lookup base details if general admin
-      ...(req.admin.role === "generalAdmin" ? [{
-        $lookup: {
-          from: "bases",
-          localField: "trainee.baseId",
-          foreignField: "_id",
-          as: "base"
-        }
-      }, {
-        $unwind: {
-          path: "$base",
-          preserveNullAndEmptyArrays: true
-        }
-      }] : []),
+      ...(req.admin.role === "generalAdmin"
+        ? [
+            {
+              $lookup: {
+                from: "bases",
+                localField: "trainee.baseId",
+                foreignField: "_id",
+                as: "base",
+              },
+            },
+            {
+              $unwind: {
+                path: "$base",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+          ]
+        : []),
       // Project final format
       {
         $project: {
@@ -1614,16 +1627,45 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
           departmentName: { $ifNull: ["$department.name", "-"] },
           subDepartmentName: { $ifNull: ["$subDepartment.name", "-"] },
           ...(req.admin.role === "generalAdmin" && {
-            baseName: { $ifNull: ["$base.name", "-"] }
-          })
-        }
-      }
+            baseName: { $ifNull: ["$base.name", "-"] },
+          }),
+        },
+      },
     ]);
-    
+
     res.json(topTrainees);
   } catch (err) {
-    console.error('Error in top trainees:', err);
+    console.error("Error in top trainees:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/trainees/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { populate } = req.query;
+
+    // Build the query
+    let query = Trainee.findById(id);
+
+    // Add population if specified
+    if (populate) {
+      const fieldsToPopulate = populate.split(",");
+      fieldsToPopulate.forEach((field) => {
+        query = query.populate(field.trim());
+      });
+    }
+
+    const trainee = await query.exec();
+
+    if (!trainee) {
+      return res.status(404).json({ message: "Trainee not found" });
+    }
+
+    res.json(trainee);
+  } catch (error) {
+    console.error("Error fetching trainee:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
