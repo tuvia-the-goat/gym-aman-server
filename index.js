@@ -347,8 +347,29 @@ app.post("/api/entries/non-registered", async (req, res) => {
 // Department routes
 app.get("/api/departments", async (req, res) => {
   try {
-    const departments = await Department.find();
+    const query = {};
+    
+    // Filter by baseId if provided
+    if (req.query.baseId) {
+      query.baseId = req.query.baseId;
+    }
+
+    const departments = await Department.find(query);
     res.json(departments);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get department by ID
+app.get("/api/departments/:id", async (req, res) => {
+  try {
+    const department = await Department.findById(req.params.id);
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    res.json(department);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -386,6 +407,20 @@ app.get("/api/subDepartments", async (req, res) => {
   try {
     const subDepartments = await SubDepartment.find();
     res.json(subDepartments);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get subDepartment by ID
+app.get("/api/subDepartments/:id", async (req, res) => {
+  try {
+    const subDepartment = await SubDepartment.findById(req.params.id);
+    if (!subDepartment) {
+      return res.status(404).json({ message: "SubDepartment not found" });
+    }
+    res.json(subDepartment);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -629,10 +664,7 @@ app.post("/api/entries", async (req, res) => {
     status, // Add subDepartmentId here
   } = req.body;
 
-  console.log({
-    traineePersonalId,
-    entryDate,
-  });
+
 
   try {
     // Check if trainee already entered today
@@ -812,14 +844,27 @@ app.get("/api/entries/paginated", authMiddleware, async (req, res) => {
     // Get total count
     const total = await Entry.countDocuments(query);
 
-    // Get paginated entries
+    // Get paginated entries with populated fields
     const entries = await Entry.find(query)
+      .populate('baseId', 'name')
+      .populate('departmentId', 'name')
+      .populate('subDepartmentId', 'name')
+      .populate('traineeId', 'orthopedicCondition medicalLimitation')
       .sort({ entryDate: -1, entryTime: -1 }) // Sort by date and time, newest first
       .skip(skip)
       .limit(limit);
 
+    // Transform entries to include names and same base check
+    const transformedEntries = entries.map(entry => ({
+      ...entry.toObject(),
+      baseName: entry.baseId?.name || '-',
+      departmentName: entry.departmentId?.name || '-',
+      subDepartmentName: entry.subDepartmentId?.name || '-',
+      hasMedicalWarning: entry.traineeId ? (entry.traineeId.orthopedicCondition || (entry.traineeId.medicalLimitation && entry.traineeId.medicalLimitation.length > 0) ? true : false) : false,
+    }));
+
     res.json({
-      entries,
+      entries: transformedEntries,
       pagination: {
         total,
         page,
@@ -1187,7 +1232,6 @@ app.put("/api/trainees/:id", authMiddleware, async (req, res) => {
   } = req.body;
 
   try {
-    console.log(gender);
 
     const trainee = await Trainee.findById(req.params.id);
 
@@ -1623,6 +1667,138 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
     res.json(topTrainees);
   } catch (err) {
     console.error('Error in top trainees:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get trainee analytics
+app.get("/api/trainees/:id/analytics", authMiddleware, async (req, res) => {
+  try {
+    const traineeId = req.params.id;
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    // Get trainee entries from last 6 months
+    const traineeEntries = await Entry.find({
+      traineeId,
+      entryDate: { $gte: sixMonthsAgo.toISOString().split('T')[0] }
+    });
+
+    // Calculate hourly distribution
+    const hourCounts = {};
+    traineeEntries.forEach(entry => {
+      const hour = entry.entryTime.split(':')[0];
+      hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+    });
+
+    const hourData = Object.keys(hourCounts)
+      .map(hour => ({
+        name: `${hour}:00`,
+        count: hourCounts[hour]
+      }))
+      .sort((a, b) => parseInt(a.name) - parseInt(b.name));
+
+    // Calculate daily distribution
+    const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+    const dayCounts = {};
+    
+    traineeEntries.forEach(entry => {
+      const date = new Date(entry.entryDate);
+      const dayOfWeek = dayNames[date.getDay()];
+      dayCounts[dayOfWeek] = (dayCounts[dayOfWeek] || 0) + 1;
+    });
+
+    const dayData = dayNames.map(day => ({
+      name: day,
+      count: dayCounts[day] || 0
+    }));
+
+    // Calculate monthly average
+    const monthsMap = new Set();
+    traineeEntries.forEach(entry => {
+      monthsMap.add(entry.entryDate.substring(0, 7)); // YYYY-MM format
+    });
+
+    const monthCount = monthsMap.size || 1;
+    const monthlyAverage = traineeEntries.length / monthCount;
+
+    // Calculate percentile among all trainees
+    const allTraineeEntryCounts = await Entry.aggregate([
+      {
+        $match: {
+          entryDate: { $gte: sixMonthsAgo.toISOString().split('T')[0] },
+          traineeId: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: "$traineeId",
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { count: -1 }
+      }
+    ]);
+
+    const rank = allTraineeEntryCounts.findIndex(t => t._id.toString() === traineeId) + 1;
+    const totalTrainees = allTraineeEntryCounts.length;
+    const percentile = Math.round((1 - rank / totalTrainees) * 100);
+
+    res.json({
+      hourData,
+      dayData,
+      monthlyAverage: monthlyAverage.toFixed(1),
+      percentile: percentile > 0 ? percentile : 0,
+      totalEntries: traineeEntries.length
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get trainee by ID
+app.get("/api/trainees/:id", authMiddleware, async (req, res) => {
+  try {
+    const trainee = await Trainee.findById(req.params.id)
+      .populate('departmentId', 'name')
+      .populate('subDepartmentId', 'name')
+      .populate('baseId', 'name');
+          
+    if (!trainee) {
+      return res.status(404).json({ message: "Trainee not found" });
+    }
+
+    // Check if the admin is authorized for this base
+    if (req.admin.role === "gymAdmin" && req.admin.baseId.toString() !== trainee.baseId.toString()) {
+      return res.status(403).json({ message: "Not authorized for this trainee" });
+    }
+
+    res.json(trainee);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/trainees/personal/:personalId", async (req, res) => {
+  try {
+    const trainee = await Trainee.findOne({ personalId: req.params.personalId })
+      .populate('departmentId', 'name')
+      .populate('subDepartmentId', 'name')
+      .populate('baseId', 'name');
+          
+
+
+    // Check if the admin is authorized for this base
+    if (req.admin && req.admin.role === "gymAdmin" && req.admin.baseId.toString() !== trainee.baseId.toString()) {
+      return res.status(403).json({ message: "Not authorized for this trainee" });
+    }
+
+    res.json(trainee);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
