@@ -21,27 +21,23 @@ app.use(express.json());
 app.set("emitNewEntry", emitNewEntry);
 
 // MongoDB connection
-mongoose
-  .connect(
-    process.env.MONGODB_URI || "mongodb://localhost:27017/gym-management",
-    {
+const connectDB = async () => {
+  try {
+    const mongoURI = process.env.MONGODB_URI || "mongodb+srv://amitos:amit5713@cluster0.ldkuwkc.mongodb.net/";
+    await mongoose.connect(mongoURI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-    }
-  )
-  .then(async () => {
-    console.log("MongoDB connected");
-    // try {
-    //   // Get the collection
-    //   const collection = mongoose.connection.collection('entries');
+    });
+    console.log("MongoDB connected successfully");
+  } catch (err) {
+    console.error("MongoDB connection error:", err.message);
+    // Exit process with failure
+    process.exit(1);
+  }
+};
 
-    //   // Drop the index
-    //   await collection.dropIndex('traineeId_1_entryDate_1');
-    // } catch {
-
-    // }
-  })
-  .catch((err) => console.error("MongoDB connection error:", err));
+// Connect to MongoDB
+connectDB();
 
 // Define schemas
 const EntryStatus = {
@@ -49,7 +45,7 @@ const EntryStatus = {
   NO_MEDICAL_APPROVAL: "noMedicalApproval",
   NOT_REGISTERED: "notRegistered",
   NOT_ASSOCIATED: "notAssociated",
-};
+}; 
 
 const AdminSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
@@ -76,7 +72,7 @@ const SubDepartmentSchema = new mongoose.Schema({
     ref: "Department",
     required: true,
   },
-  numOfPeople: { type: Number, default: 0 },
+  numOfPeople: { type: Number, default: 0 }, 
 });
 
 const TraineeSchema = new mongoose.Schema({
@@ -264,7 +260,19 @@ app.get("/api/auth/verify", authMiddleware, async (req, res) => {
 app.get("/api/bases", async (req, res) => {
   try {
     const bases = await Base.find();
-    res.json(bases);
+    
+    // Get department counts for all bases
+    const basesWithCounts = await Promise.all(
+      bases.map(async (base) => {
+        const count = await Department.countDocuments({ baseId: base._id });
+        return {
+          ...base.toObject(),
+          departmentCount: count
+        };
+      })
+    );
+    
+    res.json(basesWithCounts);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -344,6 +352,63 @@ app.post("/api/entries/non-registered", async (req, res) => {
   }
 });
 
+// Add new search route
+app.get("/api/departments/search", authMiddleware, async (req, res) => {
+  try {
+    const { query } = req.query;
+    const admin = req.admin;
+
+    if (!admin) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // Build the base query
+    const baseQuery = {};
+    if (admin?.role !== "generalAdmin") {
+      baseQuery.baseId = admin.baseId;
+    }
+
+    // Search for departments by name
+    const departments = await Department.find({
+      ...baseQuery,
+      name: { $regex: query, $options: "i" }
+    });
+
+    // Get all subdepartments that match the search query
+    const subDepartments = await SubDepartment.find({
+      name: { $regex: query, $options: "i" }
+    }).populate('departmentId');
+
+    // Filter subdepartments based on admin role
+    const filteredSubDepartments = subDepartments.filter(subDept => {
+      if (admin.role === "generalAdmin") return true;
+      return subDept.departmentId.baseId.toString() === admin.baseId.toString();
+    });
+
+    res.json({
+      departments,
+      subDepartments: filteredSubDepartments,
+    });
+  } catch (error) {
+    console.error("Error searching departments:", error);
+    res.status(500).json({ message: "Error searching departments" });
+  }
+});
+
+// // Get department by ID
+// app.get("/api/departments/:id", async (req, res) => {
+//   try {
+//     const department = await Department.findById(req.params.id);
+//     if (!department) {
+//       return res.status(404).json({ message: "Department not found" });
+//     }
+//     res.json(department);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// });
+
 // Department routes
 app.get("/api/departments", async (req, res) => {
   try {
@@ -362,14 +427,48 @@ app.get("/api/departments", async (req, res) => {
   }
 });
 
-// Get department by ID
-app.get("/api/departments/:id", async (req, res) => {
+// Paginated departments route
+app.get("/api/departments/paginated", authMiddleware, async (req, res) => {
   try {
-    const department = await Department.findById(req.params.id);
-    if (!department) {
-      return res.status(404).json({ message: "Department not found" });
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Build filter query
+    const query = {};
+
+    // Apply base filter based on admin role
+    if (req.admin.role === "gymAdmin") {
+      // Gym admins can only see their own base
+      query.baseId = req.admin.baseId;
+    } else if (req.admin.role === "generalAdmin" && req.query.baseId) {
+      // General admins can see specific base or all bases
+      query.baseId = req.query.baseId;
     }
-    res.json(department);
+
+    // Apply search filter if provided
+    if (req.query.search) {
+      query.name = { $regex: req.query.search, $options: "i" };
+    }
+
+    // Get total count
+    const total = await Department.countDocuments(query);
+
+    // Get paginated departments
+    const departments = await Department.find(query)
+      .sort({ name: 1 }) // Sort by name
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      departments,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -497,8 +596,8 @@ app.post("/api/trainees", async (req, res) => {
     baseId,
     gender,
     birthDate,
-    orthopedicCondition,
-    medicalFormScore,
+    orthopedicCondition, 
+    medicalFormScore, 
     medicalCertificateProvided,
     medicalLimitation,
     medicalApproval,
@@ -756,7 +855,9 @@ app.get("/api/admins", authMiddleware, async (req, res) => {
   }
 
   try {
-    const admins = await Admin.find().select("-password");
+    const admins = await Admin.find()
+      .select("-password")
+      .populate("baseId", "name");
     res.json(admins);
   } catch (err) {
     console.error(err);
@@ -1284,60 +1385,6 @@ app.put("/api/trainees/:id", authMiddleware, async (req, res) => {
   }
 });
 
-// Add new search route
-app.get("/api/departments/search", authMiddleware, async (req, res) => {
-  try {
-    const { query } = req.query;
-    const admin = req.admin;
-
-    if (!admin) {
-      return res.status(403).json({ message: "Not authorized" });
-    }
-
-    let baseDepartmentsIds;
-    if (admin?.role !== "generalAdmin") {
-      // Get all departments from the base
-      baseDepartmentsIds = (
-        await Department.find({
-          baseId: admin.baseId,
-        })
-      ).map((dept) => dept._id);
-    }
-
-    // Get the relevant subdepartments
-    const subDepartments = await SubDepartment.find({
-      name: { $regex: query.toLowerCase() },
-      ...(admin?.role !== "generalAdmin" && {
-        departmentId: { $in: baseDepartmentsIds },
-      }),
-    });
-
-    // Get unique department IDs that contain matching subdepartments
-    const departmentIdsWithMatchingSubs = [
-      ...new Set(subDepartments.map((sub) => sub.departmentId)),
-    ];
-
-    // Get departments that match the query or contain matching subdepartments
-    const departments = await Department.find({
-      $or: [
-        {
-          name: { $regex: query.toLowerCase() },
-          ...(admin?.role === "gymAdmin" && { baseId: admin.baseId }),
-        },
-        { _id: { $in: departmentIdsWithMatchingSubs } },
-      ],
-    });
-
-    res.json({
-      departments,
-      subDepartments,
-    });
-  } catch (error) {
-    console.error("Error searching departments:", error);
-    res.status(500).json({ message: "Error searching departments" });
-  }
-});
-
 // Create department with multiple subdepartments
 app.post(
   "/api/departments/with-subdepartments",
@@ -1387,54 +1434,6 @@ app.post(
     }
   }
 );
-
-// Paginated departments route
-app.get("/api/departments/paginated", authMiddleware, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    // Build filter query
-    const query = {};
-
-    // Apply base filter based on admin role
-    if (req.admin.role === "gymAdmin") {
-      // Gym admins can only see their own base
-      query.baseId = req.admin.baseId;
-    } else if (req.admin.role === "generalAdmin" && req.query.baseId) {
-      // General admins can see specific base or all bases
-      query.baseId = req.query.baseId;
-    }
-
-    // Apply search filter if provided
-    if (req.query.search) {
-      query.name = { $regex: req.query.search, $options: "i" };
-    }
-
-    // Get total count
-    const total = await Department.countDocuments(query);
-
-    // Get paginated departments
-    const departments = await Department.find(query)
-      .sort({ name: 1 }) // Sort by name
-      .skip(skip)
-      .limit(limit);
-
-    res.json({
-      departments,
-      pagination: {
-        total,
-        page,
-        limit,
-        pages: Math.ceil(total / limit),
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
 
 // Get today's successful entries
 app.get("/api/entries/today-successful", authMiddleware, async (req, res) => {
