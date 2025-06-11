@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const { log } = require("console");
 require("dotenv").config();
 
 // Initialize app
@@ -28,7 +29,8 @@ const connectDB = async () => {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
-    console.log("MongoDB connected successfully");
+    console.log("connected to mongoDB");
+    
   } catch (err) {
     console.error("MongoDB connection error:", err.message);
     // Exit process with failure
@@ -1840,10 +1842,965 @@ app.get("/api/trainees/personal/:personalId", async (req, res) => {
     if (req.admin && req.admin.role === "gymAdmin" && req.admin.baseId.toString() !== trainee.baseId.toString()) {
       return res.status(403).json({ message: "Not authorized for this trainee" });
     }
-
-    res.json(trainee);
+ 
+    res.json(trainee); 
   } catch (err) {
     console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Helper function to handle ID arrays
+const handleIdArray = (ids) => {
+  if (!ids) return undefined;
+  const idArray = Array.isArray(ids) ? ids : ids.split(',');
+  return idArray.map(id => new mongoose.Types.ObjectId(id));
+};
+
+// Analytics Routes
+app.get("/api/analytics/weekday", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+    
+    const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+    
+    const weekdaysData = await Entry.aggregate([
+      { $match: query },
+      {
+        $addFields: {
+          entryDateObj: { $toDate: "$entryDate" }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            dayOfWeek: { $dayOfWeek: "$entryDateObj" },
+            date: { $dateToString: { format: "%Y-%m-%d", date: "$entryDateObj" } }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.dayOfWeek",
+          totalCount: { $sum: "$count" },
+          uniqueDates: { $addToSet: "$_id.date" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          dayOfWeek: "$_id",
+          value: "$totalCount",
+          average: {
+            $cond: [
+              { $eq: [{ $size: "$uniqueDates" }, 0] },
+              0,
+              { $divide: ["$totalCount", { $size: "$uniqueDates" }] }
+            ]
+          }
+        }
+      },
+      { $sort: { dayOfWeek: 1 } }
+    ]);
+
+    console.log(weekdaysData)
+
+    // Transform the data to match the expected format
+    const formattedData = weekdaysData.map((day, index) => ({
+      name: dayNames[index],
+      value: day.value,
+      average: parseFloat(day.average.toFixed(1))
+    }));
+
+    res.json(formattedData);
+  } catch (err) {
+    console.error('Error in weekday analytics:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/monthly", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+
+    const entries = await Entry.find(query);
+
+    const monthNames = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+    const monthCounts = Array(12).fill(0);
+    const monthDateTracker = Array(12).fill().map(() => new Set());
+    
+    entries.forEach(entry => {
+      const date = new Date(entry.entryDate);
+      const monthIndex = date.getMonth();
+      monthCounts[monthIndex]++;
+      monthDateTracker[monthIndex].add(entry.entryDate);
+    });
+    
+    const monthlyData = monthNames.map((month, index) => {
+      const uniqueDatesCount = monthDateTracker[index].size;
+      return {
+        name: month,
+        value: monthCounts[index],
+        average: uniqueDatesCount > 0 
+          ? parseFloat((monthCounts[index] / uniqueDatesCount).toFixed(1)) 
+          : 0
+      };
+    });
+
+    res.json(monthlyData);
+  } catch (err) {
+    console.error('Error in monthly analytics:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/gender-distribution", authMiddleware, async (req, res) => {
+  try {
+    const { baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {};
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query._id = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Get gender distribution from trainees
+    const genderDistribution = await Trainee.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: "$gender",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Get gender distribution from entries
+    const genderEntriesDistribution = await Entry.aggregate([
+      { $match: query },
+      { $match: { traineeId: { $exists: true, $ne: null } } },
+      {
+        $lookup: {
+          from: "trainees",
+          localField: "traineeId",
+          foreignField: "_id",
+          as: "trainee"
+        }
+      },
+      { $unwind: "$trainee" },
+      {
+        $group: {
+          _id: "$trainee.gender",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Transform the data into the format expected by the chart
+    const transformedGenderData = [
+      { name: 'זכר', value: genderDistribution.find(g => g._id === 'male')?.count || 0, color: '#8884d8' },
+      { name: 'נקבה', value: genderDistribution.find(g => g._id === 'female')?.count || 0, color: '#82ca9d' }
+    ];
+    
+    const transformedEntriesData = [
+      { name: 'זכר', value: genderEntriesDistribution.find(g => g._id === 'male')?.count || 0, color: '#8884d8' },
+      { name: 'נקבה', value: genderEntriesDistribution.find(g => g._id === 'female')?.count || 0, color: '#82ca9d' }
+    ];
+
+    const response = {
+      genderDistributionData: transformedGenderData,
+      genderEntriesDistributionData: transformedEntriesData
+    };
+    res.json(response);
+  } catch (err) {
+    console.error('Error in gender distribution:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/age-distribution", authMiddleware, async (req, res) => {
+  try {
+    const { baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {};
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query._id = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Get trainees with their exact age
+    const trainees = await Trainee.aggregate([
+      { $match: query },
+      {
+        $lookup: {
+          from: "departments",
+          localField: "departmentId",
+          foreignField: "_id",
+          as: "department"
+        }
+      },
+      { $unwind: { path: "$department", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 1,
+          fullName: 1,
+          gender: 1,
+          medicalProfile: 1,
+          departmentName: { $ifNull: ["$department.name", "לא צוין"] },
+          birthDate: 1
+        }
+      }
+    ]);
+
+    // Calculate exact age for each trainee
+    const detailedAgeData = trainees.map(trainee => {
+      const birthDate = new Date(trainee.birthDate);
+      const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+      
+      return {
+        _id: trainee._id,
+        age,
+        fullName: trainee.fullName,
+        gender: trainee.gender,
+        medicalProfile: trainee.medicalProfile || 'לא צוין',
+        departmentName: trainee.departmentName
+      };
+    });
+
+    // Calculate exact age distribution
+    const ageDistribution = {};
+    detailedAgeData.forEach(trainee => {
+      const age = trainee.age;
+      ageDistribution[age] = (ageDistribution[age] || 0) + 1;
+    });
+
+    // Transform the data into the format expected by the chart
+    const transformedAgeData = Object.entries(ageDistribution)
+      .map(([age, count]) => ({
+        age: parseInt(age),
+        count: count
+      }))
+      .sort((a, b) => a.age - b.age); // Sort by age
+
+    const response = {
+      ageDistributionData: transformedAgeData,
+      detailedTraineeAgeData: detailedAgeData
+    };
+    res.json(response);
+  } catch (err) {
+    console.error('Error in age distribution:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/top-performers", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Get top trainees with a single aggregation pipeline
+    const topTrainees = await Entry.aggregate([
+      { $match: query },
+      { $match: { traineeId: { $exists: true, $ne: null } } },
+      {
+        $lookup: {
+          from: "trainees",
+          localField: "traineeId",
+          foreignField: "_id",
+          as: "trainee"
+        }
+      },
+      { $unwind: "$trainee" },
+      {
+        $lookup: {
+          from: "departments",
+          localField: "trainee.departmentId",
+          foreignField: "_id",
+          as: "department"
+        }
+      },
+      { $unwind: { path: "$department", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "bases",
+          localField: "trainee.baseId",
+          foreignField: "_id",
+          as: "base"
+        }
+      },
+      { $unwind: { path: "$base", preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: "$traineeId",
+          count: { $sum: 1 },
+          name: { $first: "$trainee.fullName" },
+          departmentName: { $first: "$department.name" },
+          baseName: { $first: "$base.name" }
+        }
+      },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+
+    // Get top departments with a single aggregation pipeline
+    const topDepartments = await Entry.aggregate([
+      { $match: query },
+      { $match: { departmentId: { $exists: true, $ne: null } } },
+      {
+        $lookup: {
+          from: "departments",
+          localField: "departmentId",
+          foreignField: "_id",
+          as: "department"
+        }
+      },
+      { $unwind: "$department" },
+      {
+        $lookup: {
+          from: "bases",
+          localField: "department.baseId",
+          foreignField: "_id",
+          as: "base"
+        }
+      },
+      { $unwind: "$base" },
+      {
+        $group: {
+          _id: "$departmentId",
+          count: { $sum: 1 },
+          name: { $first: "$department.name" },
+          baseName: { $first: "$base.name" },
+          numOfPeople: { $first: "$department.numOfPeople" }
+        }
+      },
+      {
+        $project: {
+          name: 1,
+          value: "$count",
+          percentage: {
+            $cond: [
+              { $eq: ["$numOfPeople", 0] },
+              0,
+              {
+                $round: [
+                  { $multiply: [{ $divide: ["$count", "$numOfPeople"] }, 100] },
+                  1
+                ]
+              }
+            ]
+          },
+          baseName: 1,
+          numOfPeople: 1
+        }
+      },
+      { $sort: { percentage: -1 } },
+      { $limit: 5 }
+    ]);
+
+    const response = {
+      topTraineesData: topTrainees.map(trainee => ({
+        name: trainee.name,
+        value: trainee.count,
+        departmentName: trainee.departmentName || 'Unknown',
+        baseName: trainee.baseName || 'Unknown'
+      })),
+      topDepartmentsData: topDepartments
+    };
+    res.json(response);
+  } catch (err) {
+    console.error('Error in top performers:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/top-subdepartments", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Optimized aggregation pipeline
+    const topSubDepartments = await Entry.aggregate([
+      // Initial match to filter entries early
+      { 
+        $match: {
+          ...query,
+          subDepartmentId: { $exists: true, $ne: null }
+        }
+      },
+      // Lookup subdepartments with only needed fields
+      {
+        $lookup: {
+          from: 'subdepartments',
+          let: { subDeptId: '$subDepartmentId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$subDeptId'] } } },
+            { $project: { name: 1, departmentId: 1, numOfPeople: 1 } }
+          ],
+          as: 'subDepartment'
+        }
+      },
+      { $unwind: '$subDepartment' },
+      // Lookup departments with only needed fields
+      {
+        $lookup: {
+          from: 'departments',
+          let: { deptId: '$subDepartment.departmentId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$deptId'] } } },
+            { $project: { name: 1, baseId: 1 } }
+          ],
+          as: 'department'
+        }
+      },
+      { $unwind: '$department' },
+      // Lookup bases with only needed fields
+      {
+        $lookup: {
+          from: 'bases',
+          let: { baseId: '$department.baseId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$baseId'] } } },
+            { $project: { name: 1 } }
+          ],
+          as: 'base'
+        }
+      },
+      { $unwind: '$base' },
+      // Group and calculate metrics
+      {
+        $group: {
+          _id: '$subDepartmentId',
+          count: { $sum: 1 },
+          subDepartmentName: { $first: '$subDepartment.name' },
+          departmentName: { $first: '$department.name' },
+          baseName: { $first: '$base.name' },
+          numOfPeople: { $first: '$subDepartment.numOfPeople' }
+        }
+      },
+      // Project final format with optimized calculations
+      {
+        $project: {
+          _id: 0,
+          name: '$subDepartmentName',
+          value: {
+            $round: [
+              {
+                $multiply: [
+                  { $divide: ['$count', { $max: ['$numOfPeople', 1] }] },
+                  100
+                ]
+              },
+              1
+            ]
+          },
+          rawValue: '$count',
+          departmentName: '$departmentName',
+          baseName: '$baseName',
+          numOfPeople: '$numOfPeople'
+        }
+      },
+      { $sort: { value: -1 } },
+      { $limit: 5 }
+    ]);
+
+    const response = { topSubDepartmentsData: topSubDepartments };
+    res.json(response);
+  } catch (err) {
+    console.error('Error in top subdepartments:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/bases", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Get all bases with their entry counts in a single aggregation
+    const basesData = await Entry.aggregate([
+      { $match: query },
+      {
+        $lookup: {
+          from: 'bases',
+          localField: 'baseId',
+          foreignField: '_id',
+          as: 'base'
+        }
+      },
+      { $unwind: '$base' },
+      {
+        $group: {
+          _id: '$baseId',
+          name: { $first: '$base.name' },
+          value: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          name: 1,
+          value: 1
+        }
+      }
+    ]);
+
+    // Get any bases that have no entries
+    const allBases = await Base.find({}, { name: 1 });
+    const basesWithNoEntries = allBases
+      .filter(base => !basesData.some(b => b.name === base.name))
+      .map(base => ({
+        name: base.name,
+        value: 0
+      }));
+
+    const response = {
+      basesData: [...basesData, ...basesWithNoEntries],
+      isGeneralAdmin: req.admin.role === "generalAdmin"
+    };
+    res.json(response);
+  } catch (err) {
+    console.error('Error in bases analytics:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/medical-profile", authMiddleware, async (req, res) => {
+  try {
+    const { baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const matchStage = {};
+
+    if (baseId) {
+      matchStage.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      matchStage.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      const deptIds = Array.isArray(departmentIds) 
+        ? departmentIds 
+        : departmentIds.split(',');
+      matchStage.departmentId = { $in: deptIds.map(id => new mongoose.Types.ObjectId(id)) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      const subDeptIds = Array.isArray(subDepartmentIds) 
+        ? subDepartmentIds 
+        : subDepartmentIds.split(',');
+      matchStage.subDepartmentId = { $in: subDeptIds.map(id => new mongoose.Types.ObjectId(id)) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      const traineeIdArray = Array.isArray(traineeIds) 
+        ? traineeIds 
+        : traineeIds.split(',');
+      matchStage._id = { $in: traineeIdArray.map(id => new mongoose.Types.ObjectId(id)) };
+    }
+
+    // Define colors for each medical profile
+    const profileColors = {
+      '97': '#0088FE',
+      '82': '#00C49F',
+      '72': '#FFBB28',
+      '64': '#FF8042',
+      '45': '#A478E8',
+      '25': '#FF6B6B'
+    };
+
+    const medicalProfileData = await Trainee.aggregate([
+      { $match: matchStage },
+      { $match: { medicalProfile: { $in: Object.keys(profileColors) } } },
+      {
+        $group: {
+          _id: "$medicalProfile",
+          value: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          name: "$_id",
+          value: 1
+        }
+      },
+      { $sort : { value : -1}}
+    ]);
+
+    // Add colors after aggregation
+    const medicalProfileDataWithColors = medicalProfileData.map(profile => ({
+      ...profile,
+      color: profileColors[profile.name]
+    }));
+
+    res.json({ medicalProfileData: medicalProfileDataWithColors });
+  } catch (err) {
+    console.error('Error in medical profile:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get filtered entries
+app.get("/api/analytics/filtered-entries", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = { 
+      status: { 
+        $in: ["notAssociated", "success"] 
+      } 
+    };
+
+    // Apply base filter
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply date range filter
+    if (startDate && endDate) {
+      query.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+    
+    const entries = await Entry.find(query) 
+
+ 
+
+    res.json({count: entries.length}); 
+  } catch (err) {
+    console.error('Error in filtered entries:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get filtered trainees
+app.get("/api/analytics/filtered-trainees", authMiddleware, async (req, res) => {
+  try {
+    const { baseId, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const query = {};
+
+    // Apply base filter
+    if (baseId) {
+      query.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      query.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      query.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      query.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      query._id = { $in: handleIdArray(traineeIds) };
+    }
+
+    const trainees = await Trainee.find(query)
+
+
+    res.json({ count: trainees.length });
+  } catch (err) {
+    console.error('Error in filtered trainees:', err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/analytics/hourly-distribution", authMiddleware, async (req, res) => {
+  try {
+    const { startDate, endDate, baseId, selectedDay, departmentIds, subDepartmentIds, traineeIds } = req.query;
+    const matchStage = {
+      status: { 
+        $in: ["notAssociated", "success"] 
+      }
+    };
+
+    if (startDate && endDate) {
+      matchStage.entryDate = { $gte: startDate, $lte: endDate };
+    }
+
+    if (baseId) {
+      matchStage.baseId = new mongoose.Types.ObjectId(baseId);
+    } else if (req.admin.role === "gymAdmin") {
+      matchStage.baseId = req.admin.baseId;
+    }
+
+    // Apply department filter
+    if (departmentIds) {
+      matchStage.departmentId = { $in: handleIdArray(departmentIds) };
+    }
+
+    // Apply subdepartment filter
+    if (subDepartmentIds) {
+      matchStage.subDepartmentId = { $in: handleIdArray(subDepartmentIds) };
+    }
+
+    // Apply trainee filter
+    if (traineeIds) {
+      matchStage.traineeId = { $in: handleIdArray(traineeIds) };
+    }
+
+    // Add day filter if selected 
+    if (selectedDay && selectedDay !== 'כל הימים') {
+      const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+      const dayIndex = dayNames.indexOf(selectedDay);
+      if (dayIndex !== -1) {
+        matchStage.$expr = {
+          $eq: [{ $dayOfWeek: { $dateFromString: { dateString: "$entryDate" } } }, dayIndex + 1]
+        };
+      }
+    }
+
+    const hourlyData = await Entry.aggregate([
+      { $match: matchStage },
+      {
+        $addFields: {
+          hour: {
+            $toInt: {
+              $arrayElemAt: [
+                { $split: ["$entryTime", ":"] },
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          hour: { $gte: 5, $lte: 22 }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            hour: "$hour",
+            date: "$entryDate"
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.hour",
+          totalCount: { $sum: "$count" },
+          uniqueDates: { $addToSet: "$_id.date" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          hour: "$_id",
+          name: { $concat: [{ $toString: "$_id" }, ":00"] },
+          count: "$totalCount",
+          average: {
+            $round: [
+              { $divide: ["$totalCount", { $size: "$uniqueDates" }] },
+              1
+            ]
+          }
+        }
+      },
+      { $sort: { hour: 1 } }
+    ]);
+
+    res.json({ hourlyData });
+  } catch (err) {
+    console.error('Error in hourly distribution:', err);
     res.status(500).json({ message: "Server error" });
   }
 });
