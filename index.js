@@ -1782,21 +1782,19 @@ app.get("/api/trainees/:id", authMiddleware, async (req, res) => {
       if (!trainee) {
         return res.status(404).json({ message: "Trainee not found" });
       }
-  
+      console.log(req.admin.role)
       // Check if the admin is authorized for this base
-      if (req.admin.role === "gymAdmin" && req.admin.baseId.toString() !== trainee.baseId.toString()) {
-        return res.status(403).json({ message: "Not authorized for this trainee" });
-      }
+
   
       res.json(trainee);
     } catch (err) {
-      console.error(err);
+      console.error(err); 
       res.status(500).json({ message: "Server error" });
     }
   });
           
 app.get("/api/trainees/populated/:id", async (req, res) => {
-  try {
+  try { 
     const { id } = req.params;
     const { populate } = req.query;
 
@@ -1844,7 +1842,7 @@ app.get("/api/trainees/personal/:personalId", async (req, res) => {
     }
  
     res.json(trainee); 
-  } catch (err) {
+  } catch (err) { 
     console.error(err);
     res.status(500).json({ message: "Server error" });
   }
@@ -1934,7 +1932,6 @@ app.get("/api/analytics/weekday", authMiddleware, async (req, res) => {
       { $sort: { dayOfWeek: 1 } }
     ]);
 
-    console.log(weekdaysData)
 
     // Transform the data to match the expected format
     const formattedData = weekdaysData.map((day, index) => ({
