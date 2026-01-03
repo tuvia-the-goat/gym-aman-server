@@ -1569,7 +1569,7 @@ app.get("/api/trainees/top", authMiddleware, async (req, res) => {
         $gte: lastMonth.toISOString().split("T")[0],
         $lte: now.toISOString().split("T")[0],
       },
-      status: EntryStatus.SUCCESS,
+      status: { $in: [EntryStatus.SUCCESS, EntryStatus.NOT_ASSOCIATED] },
       traineeId: { $exists: true, $ne: null },
     };
 
@@ -1695,7 +1695,8 @@ app.get("/api/trainees/:id/analytics", authMiddleware, async (req, res) => {
     // Get trainee entries from last 6 months
     const traineeEntries = await Entry.find({
       traineeId,
-      entryDate: { $gte: sixMonthsAgo.toISOString().split('T')[0] }
+      entryDate: { $gte: sixMonthsAgo.toISOString().split('T')[0] },
+      status: { $in: [EntryStatus.SUCCESS, EntryStatus.NOT_ASSOCIATED] },
     });
 
     // Calculate hourly distribution
@@ -2051,7 +2052,6 @@ app.get("/api/analytics/gender-distribution", authMiddleware, async (req, res) =
 
     // Get gender distribution from entries
     const genderEntriesDistribution = await Entry.aggregate([
-      { $match: query },
       { $match: { traineeId: { $exists: true, $ne: null } } },
       {
         $lookup: {
@@ -2062,6 +2062,13 @@ app.get("/api/analytics/gender-distribution", authMiddleware, async (req, res) =
         }
       },
       { $unwind: "$trainee" },
+      { 
+        $match: {
+          ...(traineeIds ? { "trainee._id": { $in: handleIdArray(traineeIds) } } : {}),
+          ...(departmentIds ? { "trainee.departmentId": { $in: handleIdArray(departmentIds) } } : {}),
+          ...(subDepartmentIds ? { "trainee.subDepartmentId": { $in: handleIdArray(subDepartmentIds) } } : {})
+        }
+      },
       {
         $group: {
           _id: "$trainee.gender",
@@ -2069,6 +2076,7 @@ app.get("/api/analytics/gender-distribution", authMiddleware, async (req, res) =
         }
       }
     ]);
+    console.log(genderEntriesDistribution);
 
     // Transform the data into the format expected by the chart
     const transformedGenderData = [
